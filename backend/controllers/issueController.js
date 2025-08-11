@@ -3,6 +3,7 @@ const User = require('../models/User');
 const aiService = require('../utils/aiService');
 const { reverseGeocode, validateCoordinates } = require('../utils/geocoding');
 const { uploadImage, deleteImage } = require('../utils/cloudinary');
+const emailService = require('../utils/emailService');
 
 // Create new issue
 const createIssue = async (req, res) => {
@@ -117,6 +118,7 @@ const createIssue = async (req, res) => {
     // Get AI analysis if available and images exist
     if (aiService.isAvailable() && processedImages.length > 0) {
       try {
+        // Perform image analysis
         const aiAnalysis = await aiService.analyzeImage(processedImages[0].url);
         if (aiAnalysis) {
           issueData.aiAnalysis = aiAnalysis;
@@ -126,7 +128,48 @@ const createIssue = async (req, res) => {
             issueData.category = aiAnalysis.suggestedCategory;
           }
           
-          // Update priority based on AI analysis if not explicitly set
+          // Check for duplicate issues
+          const duplicateCheck = await aiService.detectDuplicateIssues(
+            processedImages[0].url,
+            title,
+            description,
+            {
+              lat: location.coordinates[1],
+              lng: location.coordinates[0]
+            },
+            issueData.category
+          );
+          
+          // Add duplicate detection results to issue metadata
+          if (duplicateCheck && duplicateCheck.potentialDuplicates.length > 0) {
+            issueData.metadata.duplicateDetection = {
+              hasDuplicates: duplicateCheck.hasDuplicates,
+              confidence: duplicateCheck.confidence,
+              potentialDuplicates: duplicateCheck.potentialDuplicates.map(dup => ({
+                issueId: dup.issueId,
+                similarity: dup.similarity,
+                isDuplicate: dup.isDuplicate
+              }))
+            };
+          }
+          
+          // Estimate damage depth for relevant categories
+          if (['pothole', 'road_damage', 'sidewalk', 'drainage'].includes(issueData.category)) {
+            try {
+              const damageDepthEstimation = await aiService.estimateDamageDepth(
+                processedImages[0].url,
+                issueData.category
+              );
+              
+              if (damageDepthEstimation && damageDepthEstimation.estimatedDepth) {
+                issueData.aiAnalysis.damageDepth = damageDepthEstimation;
+              }
+            } catch (depthError) {
+              console.error('Damage depth estimation failed:', depthError);
+            }
+          }
+          
+          // Update priority based on AI analysis and sentiment if not explicitly set
           if (!priority || priority === 'medium') {
             const estimatedPriority = await aiService.estimatePriority(
               issueData.category, 
@@ -148,6 +191,40 @@ const createIssue = async (req, res) => {
 
     // Populate the response with user data
     await issue.populate('reportedBy', 'firstName lastName email');
+    
+    // Send notifications for high priority issues
+    if (issue.priority === 'high' || issue.priority === 'critical') {
+      try {
+        // Find admin users to notify
+        const adminUsers = await User.find({ 
+          role: 'admin', 
+          isActive: true,
+          'preferences.notifications.email': true 
+        });
+        
+        // Send email notifications to admins
+        if (adminUsers.length > 0 && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+          for (const admin of adminUsers) {
+            await emailService.sendUrgentIssueNotification(admin, {
+              _id: issue._id,
+              title: issue.title,
+              category: issue.category,
+              priority: issue.priority,
+              location: {
+                address: issue.address.formatted || 
+                  `${issue.address.street || ''}, ${issue.address.city || ''}, ${issue.address.state || ''}`
+              },
+              user: {
+                name: `${issue.reportedBy.firstName} ${issue.reportedBy.lastName}`
+              }
+            });
+          }
+        }
+      } catch (notificationError) {
+        console.error('Failed to send admin notifications:', notificationError);
+        // Don't let notification failures stop issue creation
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -382,8 +459,18 @@ const updateIssue = async (req, res) => {
     }
 
     // Update fields
-    if (status && status !== issue.status) {
+    const statusChanged = status && status !== issue.status;
+    if (statusChanged) {
+      // Store the user who is making the change for the pre-save middleware
+      issue._updatedBy = req.user._id;
+      
+      // Update status - let pre-save middleware handle statusHistory
       issue.status = status;
+      
+      // Store status notes if provided
+      if (req.body.statusNotes) {
+        issue.statusNotes = req.body.statusNotes;
+      }
     }
     
     if (priority) {
@@ -423,10 +510,42 @@ const updateIssue = async (req, res) => {
 
     // Populate response
     await issue.populate([
-      { path: 'reportedBy', select: 'firstName lastName email' },
+      { path: 'reportedBy', select: 'firstName lastName email preferences' },
       { path: 'assignedTo', select: 'firstName lastName email' },
       { path: 'adminNotes.addedBy', select: 'firstName lastName' }
     ]);
+    
+    // Send email notification to the user if status changed and they have email notifications enabled
+    if (statusChanged && issue.reportedBy && issue.reportedBy.email) {
+      try {
+        // Check if user has email notifications enabled
+        if (issue.reportedBy.preferences && issue.reportedBy.preferences.notifications.email) {
+          const statusMap = {
+            'new': 'New',
+            'in-progress': 'In Progress',
+            'resolved': 'Resolved',
+            'closed': 'Closed',
+            'reopened': 'Reopened'
+          };
+          
+          const formattedStatus = statusMap[status] || status;
+          const issueTitle = `Issue #${issue._id.toString().slice(-6)}`;
+          const issueUrl = `${process.env.FRONTEND_URL}/issues/${issue._id}`;
+          
+          await emailService.sendStatusUpdateNotification(
+            issue.reportedBy.email,
+            issue.reportedBy.firstName,
+            issueTitle,
+            formattedStatus,
+            req.body.statusNotes || '',
+            issueUrl
+          );
+        }
+      } catch (emailError) {
+        // Log error but don't fail the request
+        console.error('Failed to send status update email:', emailError);
+      }
+    }
 
     res.json({
       success: true,

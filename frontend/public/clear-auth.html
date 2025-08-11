@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear Authentication Data</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 500px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        button { background: #ef4444; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin: 5px; }
+        button:hover { background: #dc2626; }
+        .success { color: #059669; font-weight: bold; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔧 Clear Authentication Data</h2>
+        <p>If you're experiencing login issues, use this tool to clear all authentication data:</p>
+        
+        <button onclick="clearAuthData()">Clear All Auth Cookies</button>
+        <button onclick="clearLocalStorage()">Clear Local Storage</button>
+        <button onclick="clearAll()">Clear Everything</button>
+        
+        <div id="result"></div>
+        
+        <h3>Manual Cookie Check</h3>
+        <button onclick="showCookies()">Show Current Cookies</button>
+        <pre id="cookies-display"></pre>
+        
+        <h3>After Clearing</h3>
+        <p>After clearing authentication data:</p>
+        <ol>
+            <li><a href="/login-admin">Go to Admin Login</a></li>
+            <li>Use credentials: <code>admin@civic.com</code> / <code>admin123</code></li>
+        </ol>
+    </div>
+
+    <script>
+        function clearAuthData() {
+            // Clear authentication cookies
+            document.cookie = "accessToken=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+            document.cookie = "refreshToken=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+            document.cookie = "user=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+            
+            document.getElementById('result').innerHTML = '<div class="success">✅ Auth cookies cleared!</div>';
+        }
+        
+        function clearLocalStorage() {
+            localStorage.clear();
+            sessionStorage.clear();
+            document.getElementById('result').innerHTML = '<div class="success">✅ Local storage cleared!</div>';
+        }
+        
+        function clearAll() {
+            clearAuthData();
+            clearLocalStorage();
+            document.getElementById('result').innerHTML = '<div class="success">✅ All authentication data cleared!</div>';
+        }
+        
+        function showCookies() {
+            const cookies = document.cookie.split(';').map(c => c.trim()).filter(c => c.includes('Token') || c.includes('user'));
+            document.getElementById('cookies-display').textContent = cookies.length > 0 ? cookies.join('\n') : 'No authentication cookies found';
+        }
+    </script>
+</body>
+</html>

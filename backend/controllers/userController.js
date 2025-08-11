@@ -443,6 +443,60 @@ const getUserIssues = async (req, res) => {
   }
 };
 
+/**
+ * Update user preferences
+ * @route PATCH /api/users/me/preferences
+ * @access Private
+ */
+const updateUserPreferences = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { notifications } = req.body;
+
+    // Validate input
+    if (!notifications) {
+      return res.status(400).json({
+        success: false,
+        message: 'Notification preferences are required'
+      });
+    }
+
+    // Find user and update preferences
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Update notification preferences
+    if (notifications) {
+      user.preferences.notifications = {
+        ...user.preferences.notifications,
+        ...notifications
+      };
+    }
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Preferences updated successfully',
+      data: {
+        preferences: user.preferences
+      }
+    });
+  } catch (error) {
+    console.error('Update user preferences error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update preferences',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   getUsers,
   getUserById,
@@ -450,5 +504,6 @@ module.exports = {
   toggleUserStatus,
   deleteUser,
   getUserStats,
-  getUserIssues
+  getUserIssues,
+  updateUserPreferences
 };

@@ -11,12 +11,18 @@ const api = axios.create({
   },
 });
 
-// Request interceptor to add auth token
+// Request interceptor to add auth token (skip for login/register endpoints)
 api.interceptors.request.use(
   (config) => {
-    const token = Cookies.get('accessToken');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    // Skip adding token for authentication endpoints
+    const authEndpoints = ['/auth/login', '/auth/admin/login', '/auth/register', '/auth/admin/register', '/auth/refresh-token'];
+    const isAuthEndpoint = authEndpoints.some(endpoint => config.url.endsWith(endpoint));
+    
+    if (!isAuthEndpoint) {
+      const token = Cookies.get('accessToken');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
     }
     return config;
   },
@@ -110,7 +116,6 @@ export const authAPI = {
   
   // Admin authentication  
   loginAdmin: (credentials) => api.post('/auth/admin/login', credentials),
-  registerAdmin: (userData) => api.post('/auth/admin/register', userData),
   
   // Profile management
   getProfile: () => api.get('/auth/profile'),

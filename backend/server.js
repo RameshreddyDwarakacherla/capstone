@@ -14,8 +14,16 @@ const aiRoutes = require('./routes/ai');
 
 const app = express();
 
-// Security middleware
-app.use(helmet());
+// Security middleware with CORS-friendly settings
+app.use(helmet({
+  crossOriginResourcePolicy: false, // Allow cross-origin resources for images
+  contentSecurityPolicy: {
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      "img-src": ["'self'", "data:", "http:", "https:"]
+    }
+  }
+}));
 
 // CORS configuration
 app.use(cors({
@@ -24,7 +32,9 @@ app.use(cors({
     'http://localhost:64971', // Allow React dev server on dynamic port
     /^http:\/\/localhost:\d+$/ // Allow any localhost port for development
   ],
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // Rate limiting
@@ -44,8 +54,13 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
-// Static files
-app.use('/uploads', express.static('uploads'));
+// Static files with CORS headers
+app.use('/uploads', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+}, express.static('uploads'));
 
 // API routes
 app.use('/api/auth', authRoutes);

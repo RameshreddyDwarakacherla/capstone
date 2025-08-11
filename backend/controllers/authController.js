@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const { generateTokenPair, verifyRefreshToken, verifySpecialToken } = require('../utils/jwt');
 const crypto = require('crypto');
+const emailService = require('../utils/emailService');
 
 // Register new user
 const register = async (req, res) => {
@@ -27,6 +28,13 @@ const register = async (req, res) => {
       role: role === 'admin' ? 'admin' : 'user' // Only allow admin if explicitly set
     };
 
+    // Generate email verification token
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    
+    userData.emailVerificationToken = verificationToken;
+    userData.emailVerificationExpires = verificationExpires;
+    
     const user = new User(userData);
     await user.save();
 
@@ -41,15 +49,21 @@ const register = async (req, res) => {
       ipAddress: req.ip
     });
     await user.save();
+    
+    // Send verification email if email service is configured
+    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+      await emailService.sendVerificationEmail(user, verificationToken);
+    }
 
     // Remove password from response
     const userResponse = user.toObject();
     delete userResponse.password;
     delete userResponse.refreshTokens;
+    delete userResponse.emailVerificationToken;
 
     res.status(201).json({
       success: true,
-      message: 'Registration successful',
+      message: 'Registration successful. Please check your email to verify your account.',
       data: {
         user: userResponse,
         tokens
@@ -399,6 +413,217 @@ const changePassword = async (req, res) => {
   }
 };
 
+// Verify email with token
+const verifyEmail = async (req, res) => {
+  try {
+    const { token, email } = req.body;
+
+    if (!token || !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification token and email are required'
+      });
+    }
+
+    // Find user with the verification token
+    const user = await User.findOne({
+      email,
+      emailVerificationToken: token,
+      emailVerificationExpires: { $gt: Date.now() }
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired verification token'
+      });
+    }
+
+    // Mark email as verified and remove verification token
+    user.isEmailVerified = true;
+    user.emailVerificationToken = undefined;
+    user.emailVerificationExpires = undefined;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Email verified successfully'
+    });
+  } catch (error) {
+    console.error('Email verification error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Email verification failed',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Resend verification email
+const resendVerificationEmail = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    // Find user by email
+    const user = await User.findByEmail(email);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check if email is already verified
+    if (user.isEmailVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is already verified'
+      });
+    }
+
+    // Generate new verification token
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+    user.emailVerificationToken = verificationToken;
+    user.emailVerificationExpires = verificationExpires;
+    await user.save();
+
+    // Send verification email
+    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+      await emailService.sendVerificationEmail(user, verificationToken);
+    } else {
+      return res.status(500).json({
+        success: false,
+        message: 'Email service not configured'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Verification email sent successfully'
+    });
+  } catch (error) {
+    console.error('Resend verification email error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to resend verification email',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Request password reset
+const requestPasswordReset = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    // Find user by email
+    const user = await User.findByEmail(email);
+    if (!user) {
+      // For security reasons, don't reveal that the user doesn't exist
+      return res.json({
+        success: true,
+        message: 'If your email is registered, you will receive a password reset link'
+      });
+    }
+
+    // Generate password reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    user.passwordResetToken = resetToken;
+    user.passwordResetExpires = resetExpires;
+    await user.save();
+
+    // Send password reset email
+    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+      await emailService.sendPasswordResetEmail(user, resetToken);
+    } else {
+      return res.status(500).json({
+        success: false,
+        message: 'Email service not configured'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'If your email is registered, you will receive a password reset link'
+    });
+  } catch (error) {
+    console.error('Password reset request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to process password reset request',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Reset password with token
+const resetPassword = async (req, res) => {
+  try {
+    const { token, email, password } = req.body;
+
+    if (!token || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token, email, and new password are required'
+      });
+    }
+
+    // Find user with the reset token
+    const user = await User.findOne({
+      email,
+      passwordResetToken: token,
+      passwordResetExpires: { $gt: Date.now() }
+    }).select('+password');
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired reset token'
+      });
+    }
+
+    // Update password and clear reset token
+    user.password = password;
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    
+    // Clear all refresh tokens to force re-login with new password
+    user.refreshTokens = [];
+    
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Password reset successful. Please log in with your new password.'
+    });
+  } catch (error) {
+    console.error('Password reset error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Password reset failed',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -407,5 +632,9 @@ module.exports = {
   logoutAll,
   getProfile,
   updateProfile,
-  changePassword
+  changePassword,
+  verifyEmail,
+  resendVerificationEmail,
+  requestPasswordReset,
+  resetPassword
 };

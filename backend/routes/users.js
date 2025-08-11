@@ -9,7 +9,8 @@ const {
   toggleUserStatus,
   deleteUser,
   getUserStats,
-  getUserIssues
+  getUserIssues,
+  updateUserPreferences
 } = require('../controllers/userController');
 
 // Import middleware
@@ -29,5 +30,8 @@ router.delete('/:id', requireAdmin, validateObjectId('id'), deleteUser);
 
 // User can view their own issues, admin can view any user's issues
 router.get('/:id/issues', validateObjectId('id'), requireOwnershipOrAdmin('id'), getUserIssues);
+
+// User preferences route
+router.patch('/me/preferences', updateUserPreferences);
 
 module.exports = router;

@@ -14,7 +14,6 @@ import HomePage from './pages/HomePage';
 import LoginUser from './pages/Auth/LoginUser';
 import SignupUser from './pages/Auth/SignupUser';
 import LoginAdmin from './pages/Auth/LoginAdmin';
-import SignupAdmin from './pages/Auth/SignupAdmin';
 import UserDashboard from './pages/User/UserDashboard';
 import AdminDashboard from './pages/Admin/AdminDashboard';
 import ReportIssue from './pages/User/ReportIssue';
@@ -41,7 +40,6 @@ function App() {
                 <Route path="/login-user" element={<LoginUser />} />
                 <Route path="/signup-user" element={<SignupUser />} />
                 <Route path="/login-admin" element={<LoginAdmin />} />
-                <Route path="/signup-admin" element={<SignupAdmin />} />
                 
                 {/* Protected User Routes */}
                 <Route path="/dashboard" element={

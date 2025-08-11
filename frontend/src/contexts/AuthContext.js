@@ -106,7 +106,9 @@ export const AuthProvider = ({ children }) => {
           api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
           
           // Verify token is still valid by fetching profile
+          console.log('🔐 Verifying stored token...');
           const response = await api.get('/auth/profile');
+          console.log('✅ Token verification successful');
           
           dispatch({
             type: AUTH_ACTIONS.LOGIN_SUCCESS,
@@ -116,7 +118,35 @@ export const AuthProvider = ({ children }) => {
             }
           });
         } catch (error) {
-          console.error('Token verification failed:', error);
+          console.error('❌ Token verification failed:', error.response?.data?.message || error.message);
+          
+          // Try to refresh token if we have a refresh token
+          if (refreshToken && error.response?.status === 401) {
+            try {
+              console.log('🔄 Attempting token refresh...');
+              const refreshResponse = await api.post('/auth/refresh-token', { refreshToken });
+              const { tokens: newTokens } = refreshResponse.data.data;
+              
+              // Update cookies
+              setAuthCookies(JSON.parse(userStr), newTokens);
+              
+              // Set new token in API
+              api.defaults.headers.common['Authorization'] = `Bearer ${newTokens.accessToken}`;
+              
+              console.log('✅ Token refresh successful');
+              dispatch({
+                type: AUTH_ACTIONS.LOGIN_SUCCESS,
+                payload: {
+                  user: JSON.parse(userStr),
+                  tokens: newTokens
+                }
+              });
+              return;
+            } catch (refreshError) {
+              console.error('❌ Token refresh failed:', refreshError.response?.data?.message || refreshError.message);
+            }
+          }
+          
           // Clear invalid tokens
           clearAuthCookies();
           dispatch({ type: AUTH_ACTIONS.LOGIN_FAILURE });
@@ -154,6 +184,9 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password, role = 'user') => {
     try {
       dispatch({ type: AUTH_ACTIONS.LOGIN_START });
+
+      // Clear any existing auth cookies before login attempt
+      clearAuthCookies();
 
       const endpoint = role === 'admin' ? '/auth/admin/login' : '/auth/login';
       const response = await api.post(endpoint, { email, password });
@@ -209,7 +242,12 @@ export const AuthProvider = ({ children }) => {
         }
       }
 
-      const endpoint = role === 'admin' ? '/auth/admin/register' : '/auth/register';
+      // Admin registration is not allowed through public interface
+      if (role === 'admin') {
+        throw new Error('Admin registration is not permitted through this interface. Contact your system administrator.');
+      }
+      
+      const endpoint = '/auth/register';
       const payload = { ...cleanUserData, role };
       
       console.log('Registration payload:', JSON.stringify(payload, null, 2)); // Debug log with full JSON

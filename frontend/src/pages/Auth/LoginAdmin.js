@@ -166,13 +166,7 @@ const LoginAdmin = () => {
             </div>
             
             <div className="text-sm text-gray-600 dark:text-gray-400">
-              Need admin access?{' '}
-              <Link 
-                to="/signup-admin" 
-                className="text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300 font-medium"
-              >
-                Request Account
-              </Link>
+              Need admin access? Contact your system administrator for account creation.
             </div>
             
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4">

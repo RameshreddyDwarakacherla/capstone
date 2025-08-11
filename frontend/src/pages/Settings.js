@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Bell, 
@@ -21,11 +21,13 @@ import Card from '../components/UI/Card';
 import { Switch } from '../components/UI/Switch';
 import { ConfirmModal } from '../components/UI/Modal';
 import toast from 'react-hot-toast';
+import api from '../services/api';
 
 const Settings = () => {
-  const { user, logout } = useAuth();
+  const { user, logout, updateUser } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [settings, setSettings] = useState({
     notifications: {
       email: true,
@@ -47,7 +49,21 @@ const Settings = () => {
     }
   });
 
-  const handleSettingChange = (category, setting, value) => {
+  // Initialize settings from user data
+  useEffect(() => {
+    if (user && user.preferences) {
+      setSettings(prevSettings => ({
+        ...prevSettings,
+        notifications: {
+          ...prevSettings.notifications,
+          ...(user.preferences.notifications || {})
+        }
+      }));
+    }
+  }, [user]);
+
+  const handleSettingChange = async (category, setting, value) => {
+    // Update local state immediately for responsive UI
     setSettings(prev => ({
       ...prev,
       [category]: {
@@ -56,8 +72,49 @@ const Settings = () => {
       }
     }));
     
-    // In a real app, you'd save this to the backend
-    toast.success('Setting updated successfully');
+    // Only save notification preferences to backend
+    if (category === 'notifications') {
+      setIsLoading(true);
+      try {
+        // Save to backend
+        await api.patch('/users/me/preferences', {
+          notifications: {
+            [setting]: value
+          }
+        });
+        
+        // Update user in context
+        if (updateUser) {
+          await updateUser({
+            preferences: {
+              notifications: {
+                ...user.preferences?.notifications,
+                [setting]: value
+              }
+            }
+          });
+        }
+        
+        toast.success('Preferences updated successfully');
+      } catch (error) {
+        // Revert local state on error
+        setSettings(prev => ({
+          ...prev,
+          [category]: {
+            ...prev[category],
+            [setting]: !value // Revert to previous value
+          }
+        }));
+        
+        const message = error.response?.data?.message || 'Failed to update preferences';
+        toast.error(message);
+      } finally {
+        setIsLoading(false);
+      }
+    } else {
+      // For non-notification settings that don't connect to backend yet
+      toast.success('Setting updated successfully');
+    }
   };
 
   const exportData = () => {
@@ -170,6 +227,23 @@ const Settings = () => {
                   <Switch
                     checked={settings.notifications.email}
                     onChange={(checked) => handleSettingChange('notifications', 'email', checked)}
+                    disabled={isLoading}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium text-gray-900 dark:text-white">
+                      Push Notifications
+                    </h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      Receive notifications on your device
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.notifications.push}
+                    onChange={(checked) => handleSettingChange('notifications', 'push', checked)}
+                    disabled={isLoading}
                   />
                 </div>
 
@@ -185,6 +259,7 @@ const Settings = () => {
                   <Switch
                     checked={settings.notifications.issueUpdates}
                     onChange={(checked) => handleSettingChange('notifications', 'issueUpdates', checked)}
+                    disabled={isLoading}
                   />
                 </div>
 
@@ -200,6 +275,7 @@ const Settings = () => {
                   <Switch
                     checked={settings.notifications.adminMessages}
                     onChange={(checked) => handleSettingChange('notifications', 'adminMessages', checked)}
+                    disabled={isLoading}
                   />
                 </div>
 
@@ -215,6 +291,7 @@ const Settings = () => {
                   <Switch
                     checked={settings.notifications.weeklyDigest}
                     onChange={(checked) => handleSettingChange('notifications', 'weeklyDigest', checked)}
+                    disabled={isLoading}
                   />
                 </div>
               </div>

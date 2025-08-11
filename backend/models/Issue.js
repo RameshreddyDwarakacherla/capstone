@@ -88,7 +88,19 @@ const issueSchema = new mongoose.Schema({
     },
     suggestedCategory: String,
     confidence: Number, // AI confidence score (0-1)
-    processedAt: Date
+    processedAt: Date,
+    sentiment: {
+      overall: String, // negative, somewhat_negative, neutral, somewhat_positive, positive
+      urgency: Number, // 0-1 score
+      safety: Number,  // 0-1 score
+      impact: Number   // 0-1 score
+    },
+    damageDepth: {
+      estimatedDepth: Number, // in centimeters
+      confidence: Number,    // 0-1 score
+      unit: String,          // cm, inches, etc.
+      damageAssessment: String // Brief assessment of damage severity
+    }
   },
   reportedBy: {
     type: mongoose.Schema.Types.ObjectId,
@@ -176,8 +188,20 @@ const issueSchema = new mongoose.Schema({
     deviceInfo: String,
     reportingMethod: {
       type: String,
-      enum: ['web', 'mobile', 'api'],
+      enum: ['web', 'mobile', 'api', 'admin'],
       default: 'web'
+    },
+    duplicateDetection: {
+      hasDuplicates: Boolean,
+      confidence: Number, // 0-1 score
+      potentialDuplicates: [{
+        issueId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Issue'
+        },
+        similarity: Number, // 0-1 score
+        isDuplicate: Boolean
+      }]
     }
   }
 }, {
@@ -217,11 +241,20 @@ issueSchema.virtual('ageInDays').get(function() {
 // Pre-save middleware to update status history
 issueSchema.pre('save', function(next) {
   if (this.isModified('status') && !this.isNew) {
+    // Use _updatedBy if available (from admin updates), otherwise fallback to assignedTo or reportedBy
+    const changedBy = this._updatedBy || this.assignedTo || this.reportedBy;
+    
     this.statusHistory.push({
       status: this.status,
-      changedBy: this.assignedTo || this.reportedBy,
-      changedAt: new Date()
+      changedBy: changedBy,
+      changedAt: new Date(),
+      reason: this.statusNotes || undefined
     });
+    
+    // Clean up temporary field
+    if (this._updatedBy) {
+      this._updatedBy = undefined;
+    }
     
     if (this.status === 'resolved') {
       this.resolvedAt = new Date();

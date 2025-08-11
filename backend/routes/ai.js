@@ -6,7 +6,8 @@ const {
   categorizeIssue,
   generateResolutionSuggestions,
   healthCheck,
-  getStats
+  getStats,
+  generateWeeklyReport
 } = require('../controllers/aiController');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { handleValidationErrors } = require('../middleware/validation');
@@ -103,6 +104,12 @@ router.get('/stats', [
   authenticateToken,
   requireAdmin
 ], getStats);
+
+// Weekly report generation endpoint (admin only)
+router.get('/weekly-report', [
+  authenticateToken,
+  requireAdmin
+], generateWeeklyReport);
 
 // Batch image analysis endpoint
 router.post('/analyze-images-batch', [

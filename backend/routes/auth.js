@@ -10,7 +10,11 @@ const {
   logoutAll,
   getProfile,
   updateProfile,
-  changePassword
+  changePassword,
+  verifyEmail,
+  resendVerificationEmail,
+  requestPasswordReset,
+  resetPassword
 } = require('../controllers/authController');
 
 // Import middleware
@@ -26,11 +30,17 @@ router.post('/register', validateUserRegistration, register);
 router.post('/login', validateUserLogin, login);
 router.post('/refresh-token', refreshToken);
 
-// Admin-specific routes (still use same controllers but with role validation)
-router.post('/admin/register', validateUserRegistration, (req, res, next) => {
-  req.body.role = 'admin';
-  next();
-}, register);
+// Email verification and password reset routes
+router.post('/verify-email', verifyEmail);
+router.post('/resend-verification', resendVerificationEmail);
+router.post('/request-password-reset', requestPasswordReset);
+router.post('/reset-password', resetPassword);
+
+// Admin registration disabled for security - use setup-default-admin.js script instead
+// router.post('/admin/register', validateUserRegistration, (req, res, next) => {
+//   req.body.role = 'admin';
+//   next();
+// }, register);
 
 router.post('/admin/login', validateUserLogin, (req, res, next) => {
   req.body.expectedRole = 'admin';

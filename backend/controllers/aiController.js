@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { AppError } = require('../middleware/errorHandler');
+const aiService = require('../utils/aiService');
 
 // Gemini API configuration
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -21,6 +22,44 @@ const CIVIC_CATEGORIES = {
   'noise_complaint': 'Noise pollution from construction, traffic, or other sources',
   'other': 'Issues that don\'t fit into other categories'
 };
+
+/**
+ * Generate a weekly report of civic issues using AI analysis
+ */
+const generateWeeklyReport = asyncHandler(async (req, res) => {
+  // Check if user is admin
+  if (req.user.role !== 'admin') {
+    throw new AppError('Only administrators can generate reports', 403);
+  }
+  
+  // Get date range from request or default to last 7 days
+  const { startDate, endDate } = req.query;
+  
+  const reportStartDate = startDate ? new Date(startDate) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const reportEndDate = endDate ? new Date(endDate) : new Date();
+  
+  // Validate date range
+  if (reportStartDate > reportEndDate) {
+    throw new AppError('Start date must be before end date', 400);
+  }
+  
+  // Check if AI service is available
+  if (!aiService.isAvailable()) {
+    throw new AppError('AI service is not available', 503);
+  }
+  
+  // Generate the report
+  const report = await aiService.generateWeeklyReport(reportStartDate, reportEndDate);
+  
+  if (!report.success) {
+    throw new AppError(report.error || 'Failed to generate report', 500);
+  }
+  
+  res.status(200).json({
+    success: true,
+    data: report
+  });
+});
 
 /**
  * Analyze an image using OpenAI Vision API
@@ -584,5 +623,6 @@ module.exports = {
   categorizeIssue,
   generateResolutionSuggestions,
   healthCheck,
-  getStats
+  getStats,
+  generateWeeklyReport
 };

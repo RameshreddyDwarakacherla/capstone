@@ -11,13 +11,15 @@ import {
   BarChart3,
   Settings,
   Eye,
-  Filter
+  Filter,
+  FileText
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import Button from '../../components/UI/Button';
 import Card from '../../components/UI/Card';
 import StatusBadge from '../../components/UI/StatusBadge';
 import MapComponent from '../../components/Map/MapComponent';
+import WeeklyReportCard from '../../components/Admin/WeeklyReportCard';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
 
@@ -413,11 +415,21 @@ const AdminDashboard = () => {
           </motion.div>
         </div>
 
-        {/* Quick Actions */}
+        {/* Weekly Report */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.5 }}
+          className="mt-8 weekly-report-section"
+        >
+          <WeeklyReportCard />
+        </motion.div>
+        
+        {/* Quick Actions */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6 }}
           className="mt-8"
         >
           <Card>
@@ -478,6 +490,24 @@ const AdminDashboard = () => {
                   <Eye className="w-8 h-8 mb-2 text-purple-600" />
                   <span className="font-medium">All Issues</span>
                   <span className="text-xs text-gray-500 mt-1">{stats.totalIssues} total</span>
+                </Button>
+              </motion.div>
+              
+              <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+                <Button
+                  variant="outline"
+                  className="flex flex-col items-center p-6 h-auto w-full border-green-300 hover:bg-green-50 dark:hover:bg-green-900/20"
+                  onClick={() => {
+                    const reportSection = document.querySelector('.weekly-report-section');
+                    if (reportSection) {
+                      reportSection.scrollIntoView({ behavior: 'smooth' });
+                      toast.success('Generating weekly AI report');
+                    }
+                  }}
+                >
+                  <FileText className="w-8 h-8 mb-2 text-green-600" />
+                  <span className="font-medium">Weekly Report</span>
+                  <span className="text-xs text-gray-500 mt-1">AI-generated insights</span>
                 </Button>
               </motion.div>
             </div>
