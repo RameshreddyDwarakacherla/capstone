@@ -29,6 +29,7 @@ const MyIssues = () => {
   const [filteredIssues, setFilteredIssues] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sortBy, setSortBy] = useState('createdAt');
@@ -54,8 +55,12 @@ const MyIssues = () => {
   ];
 
   useEffect(() => {
-    fetchIssues();
-  }, []);
+    if (user && user._id) {
+      fetchIssues();
+    } else {
+      setLoading(false);
+    }
+  }, [user]);
 
   useEffect(() => {
     filterAndSortIssues();
@@ -64,11 +69,51 @@ const MyIssues = () => {
   const fetchIssues = async () => {
     try {
       setLoading(true);
-      const response = await api.get(`/issues?reportedBy=${user._id}&limit=100`);
-      setIssues(response.data.data.issues);
+      console.log('Fetching issues for user:', user._id);
+      
+      // Add timeout to prevent infinite loading
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Request timeout')), 10000)
+      );
+      
+      const apiPromise = api.get(`/issues?reportedBy=${user._id}&limit=100`);
+      
+      const response = await Promise.race([apiPromise, timeoutPromise]);
+      console.log('Issues response:', response.data);
+      
+      if (response.data.success && response.data.data.issues) {
+        setIssues(response.data.data.issues);
+        console.log('Set issues:', response.data.data.issues.length);
+      } else {
+        console.error('Invalid response format:', response.data);
+        setIssues([]);
+        toast.error('Invalid response from server');
+      }
     } catch (error) {
       console.error('Error fetching issues:', error);
-      toast.error('Failed to load your issues');
+      console.error('Error response:', error.response?.data);
+      
+      if (error.message === 'Request timeout') {
+        toast.error('Request timed out. Please try again.');
+      } else if (error.code === 'ECONNABORTED') {
+        toast.error('Connection timeout. Please check your internet connection.');
+      } else if (error.response?.status === 500) {
+        toast.error('Server error. Please try again later.');
+      } else {
+        toast.error('Failed to load your issues. Please try again.');
+      }
+      
+      setIssues([]); // Set empty array on error
+      
+      // Auto-retry once if it's the first failure
+      if (retryCount === 0 && error.message !== 'Request timeout') {
+        console.log('Auto-retrying request...');
+        setRetryCount(1);
+        setTimeout(() => {
+          fetchIssues();
+        }, 2000);
+        return;
+      }
     } finally {
       setLoading(false);
     }
@@ -234,6 +279,21 @@ const MyIssues = () => {
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-gray-600 dark:text-gray-400">Loading your issues...</p>
+          {retryCount > 0 && (
+            <p className="text-sm text-gray-500 mt-2">Retrying... ({retryCount}/1)</p>
+          )}
+          <Button
+            onClick={() => {
+              setLoading(false);
+              setRetryCount(0);
+              fetchIssues();
+            }}
+            variant="outline"
+            size="sm"
+            className="mt-4"
+          >
+            Cancel & Retry
+          </Button>
         </div>
       </div>
     );

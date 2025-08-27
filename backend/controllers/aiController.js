@@ -31,30 +31,30 @@ const generateWeeklyReport = asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') {
     throw new AppError('Only administrators can generate reports', 403);
   }
-  
+
   // Get date range from request or default to last 7 days
   const { startDate, endDate } = req.query;
-  
+
   const reportStartDate = startDate ? new Date(startDate) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const reportEndDate = endDate ? new Date(endDate) : new Date();
-  
+
   // Validate date range
   if (reportStartDate > reportEndDate) {
     throw new AppError('Start date must be before end date', 400);
   }
-  
+
   // Check if AI service is available
   if (!aiService.isAvailable()) {
     throw new AppError('AI service is not available', 503);
   }
-  
+
   // Generate the report
   const report = await aiService.generateWeeklyReport(reportStartDate, reportEndDate);
-  
+
   if (!report.success) {
     throw new AppError(report.error || 'Failed to generate report', 500);
   }
-  
+
   res.status(200).json({
     success: true,
     data: report
@@ -86,17 +86,27 @@ const analyzeImage = asyncHandler(async (req, res) => {
   }
 
   try {
-    const prompt = `Analyze this image for civic infrastructure issues. Provide:
-    1. A detailed description of what you see
-    2. Identify any infrastructure problems, damage, or issues
-    3. Suggest the most appropriate category from: ${Object.keys(CIVIC_CATEGORIES).join(', ')}
-    4. Rate the severity on a scale of 1-5 (1=minor, 5=urgent)
-    5. Provide confidence level (0-1) in your analysis
-    
-    Format your response as JSON with fields: description, suggestedCategory, severity, confidence, keyFeatures`;
+    const prompt = `Analyze this civic infrastructure image and provide a clear, helpful analysis.
+
+Please examine the image and provide:
+1. A detailed, user-friendly description of what you observe
+2. Identify any infrastructure problems, damage, or safety concerns
+3. Suggest the most appropriate category from: ${Object.keys(CIVIC_CATEGORIES).join(', ')}
+4. Rate the severity (1=minor, 5=urgent)
+5. List key features or problems visible
+6. Your confidence in this analysis (0-1)
+
+Respond in JSON format with these exact fields:
+{
+  "description": "Clear, detailed description in plain English",
+  "suggestedCategory": "category_name",
+  "severity": number_1_to_5,
+  "confidence": decimal_0_to_1,
+  "keyFeatures": ["feature1", "feature2", "feature3"]
+}`;
 
     const response = await axios.post(
-      `${GEMINI_BASE_URL}/models/gemini-1.5-pro:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE_URL}/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`,
       {
         contents: [{
           parts: [
@@ -120,26 +130,39 @@ const analyzeImage = asyncHandler(async (req, res) => {
         headers: {
           'Content-Type': 'application/json'
         },
-        timeout: 30000
+        timeout: 15000
       }
     );
 
     const aiResponse = response.data.candidates[0]?.content?.parts[0]?.text;
-    
+
     try {
+      // Clean the response - remove any markdown formatting or extra text
+      let cleanResponse = aiResponse.trim();
+
+      // Extract JSON if it's wrapped in markdown code blocks
+      const jsonMatch = cleanResponse.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
+      if (jsonMatch) {
+        cleanResponse = jsonMatch[1];
+      }
+
       // Try to parse the JSON response
-      const analysisData = JSON.parse(aiResponse);
-      
-      // Validate and format the response
+      const analysisData = JSON.parse(cleanResponse);
+
+      // Validate and format the response with user-friendly formatting
       const analysis = {
         description: analysisData.description || 'Image analyzed successfully',
         suggestedCategory: analysisData.suggestedCategory || 'other',
         severity: Math.min(Math.max(analysisData.severity || 1, 1), 5),
         confidence: Math.min(Math.max(analysisData.confidence || 0.5, 0), 1),
-        keyFeatures: analysisData.keyFeatures || [],
+        keyFeatures: Array.isArray(analysisData.keyFeatures) ? analysisData.keyFeatures : [],
         source: 'gemini_vision',
         timestamp: new Date().toISOString(),
-        model: 'gemini-1.5-pro'
+        model: 'gemini-2.0-flash-exp',
+        // Add user-friendly formatting
+        severityText: getSeverityText(Math.min(Math.max(analysisData.severity || 1, 1), 5)),
+        confidenceText: getConfidenceText(Math.min(Math.max(analysisData.confidence || 0.5, 0), 1)),
+        categoryDescription: CIVIC_CATEGORIES[analysisData.suggestedCategory] || CIVIC_CATEGORIES.other
       };
 
       res.status(200).json({
@@ -148,16 +171,24 @@ const analyzeImage = asyncHandler(async (req, res) => {
       });
 
     } catch (parseError) {
-      // If JSON parsing fails, extract information from text
+      console.log('JSON parse error, using text extraction:', parseError.message);
+
+      // If JSON parsing fails, create a user-friendly response from the text
+      const cleanText = aiResponse.replace(/```json|```/g, '').trim();
+
       const analysis = {
-        description: aiResponse.substring(0, 500) + (aiResponse.length > 500 ? '...' : ''),
-        suggestedCategory: extractCategoryFromText(aiResponse),
-        severity: extractSeverityFromText(aiResponse),
+        description: extractDescriptionFromText(cleanText),
+        suggestedCategory: extractCategoryFromText(cleanText),
+        severity: extractSeverityFromText(cleanText),
         confidence: 0.7,
-        keyFeatures: [],
+        keyFeatures: extractKeyFeaturesFromText(cleanText),
         source: 'gemini_vision_text',
         timestamp: new Date().toISOString(),
-        model: 'gemini-1.5-pro'
+        model: 'gemini-2.0-flash-exp',
+        severityText: getSeverityText(extractSeverityFromText(cleanText)),
+        confidenceText: getConfidenceText(0.7),
+        categoryDescription: CIVIC_CATEGORIES[extractCategoryFromText(cleanText)] || CIVIC_CATEGORIES.other,
+        rawResponse: cleanText.substring(0, 200) + (cleanText.length > 200 ? '...' : '')
       };
 
       res.status(200).json({
@@ -168,10 +199,10 @@ const analyzeImage = asyncHandler(async (req, res) => {
 
   } catch (error) {
     console.error('Gemini API error:', error);
-    
+
     // Provide a more helpful fallback based on file name or basic analysis
     const fallbackDescription = generateSmartFallback(filename, fileType);
-    
+
     // Return enhanced fallback analysis
     res.status(200).json({
       success: true,
@@ -219,11 +250,11 @@ const categorizeIssue = asyncHandler(async (req, res) => {
     
     Description: "${description}"
     
-    ${combinedInfo.imageAnalyses.length > 0 ? 
-      `Image Analysis Results:\n${combinedInfo.imageAnalyses.map((analysis, i) => 
-        `Image ${i+1}: ${analysis.description}`
-      ).join('\n')}` : ''
-    }
+    ${combinedInfo.imageAnalyses.length > 0 ?
+        `Image Analysis Results:\n${combinedInfo.imageAnalyses.map((analysis, i) =>
+          `Image ${i + 1}: ${analysis.description}`
+        ).join('\n')}` : ''
+      }
     
     Available categories: ${Object.keys(CIVIC_CATEGORIES).join(', ')}
     
@@ -231,7 +262,7 @@ const categorizeIssue = asyncHandler(async (req, res) => {
     `;
 
     const response = await axios.post(
-      `${GEMINI_BASE_URL}/models/gemini-1.5-pro:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE_URL}/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`,
       {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
@@ -248,10 +279,10 @@ const categorizeIssue = asyncHandler(async (req, res) => {
     );
 
     const aiResponse = response.data.candidates[0]?.content?.parts[0]?.text;
-    
+
     try {
       const categorization = JSON.parse(aiResponse);
-      
+
       res.status(200).json({
         success: true,
         data: {
@@ -267,7 +298,7 @@ const categorizeIssue = asyncHandler(async (req, res) => {
     } catch (parseError) {
       const fallback = keywordBasedCategorization(description);
       fallback.source = 'gemini_parse_error';
-      
+
       res.status(200).json({
         success: true,
         data: fallback
@@ -276,7 +307,7 @@ const categorizeIssue = asyncHandler(async (req, res) => {
 
   } catch (error) {
     console.error('Categorization error:', error);
-    
+
     const fallback = keywordBasedCategorization(description);
     fallback.source = 'error_fallback';
     fallback.error = error.message;
@@ -325,7 +356,7 @@ const generateResolutionSuggestions = asyncHandler(async (req, res) => {
     `;
 
     const response = await axios.post(
-      `${GEMINI_BASE_URL}/models/gemini-1.5-pro:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE_URL}/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`,
       {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
@@ -342,10 +373,10 @@ const generateResolutionSuggestions = asyncHandler(async (req, res) => {
     );
 
     const aiResponse = response.data.candidates[0]?.content?.parts[0]?.text;
-    
+
     try {
       const suggestions = JSON.parse(aiResponse);
-      
+
       res.status(200).json({
         success: true,
         data: {
@@ -369,7 +400,7 @@ const generateResolutionSuggestions = asyncHandler(async (req, res) => {
 
   } catch (error) {
     console.error('Resolution suggestions error:', error);
-    
+
     fallbackSuggestions.source = 'error_fallback';
     fallbackSuggestions.error = error.message;
 
@@ -396,7 +427,7 @@ const healthCheck = asyncHandler(async (req, res) => {
     try {
       // Quick test call to Gemini
       await axios.post(
-        `${GEMINI_BASE_URL}/models/gemini-1.5-pro:generateContent?key=${GEMINI_API_KEY}`,
+        `${GEMINI_BASE_URL}/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`,
         {
           contents: [{ parts: [{ text: "Test" }] }],
           generationConfig: { maxOutputTokens: 1 }
@@ -431,7 +462,7 @@ const getStats = asyncHandler(async (req, res) => {
     accuracy: 0.85,
     averageResponseTime: 2500, // milliseconds
     lastUpdate: new Date().toISOString(),
-    modelsAvailable: GEMINI_API_KEY ? ['gemini-1.5-pro'] : [],
+    modelsAvailable: GEMINI_API_KEY ? ['gemini-2.0-flash-exp'] : [],
     supportedFeatures: {
       imageAnalysis: !!GEMINI_API_KEY,
       categorization: true,
@@ -448,17 +479,96 @@ const getStats = asyncHandler(async (req, res) => {
 // Helper functions
 
 /**
+ * Get user-friendly severity text
+ */
+function getSeverityText(severity) {
+  const severityMap = {
+    1: 'Minor Issue',
+    2: 'Low Priority',
+    3: 'Medium Priority',
+    4: 'High Priority',
+    5: 'Urgent - Immediate Action Required'
+  };
+  return severityMap[severity] || 'Unknown';
+}
+
+/**
+ * Get user-friendly confidence text
+ */
+function getConfidenceText(confidence) {
+  if (confidence >= 0.9) return 'Very High Confidence';
+  if (confidence >= 0.7) return 'High Confidence';
+  if (confidence >= 0.5) return 'Medium Confidence';
+  if (confidence >= 0.3) return 'Low Confidence';
+  return 'Very Low Confidence';
+}
+
+/**
+ * Extract description from text response
+ */
+function extractDescriptionFromText(text) {
+  // Look for description patterns in the text
+  const descriptionPatterns = [
+    /description['":\s]+([^"'\n]+)/i,
+    /shows?\s+([^.!?]+[.!?])/i,
+    /image\s+(?:shows?|depicts?|contains?)\s+([^.!?]+[.!?])/i
+  ];
+
+  for (const pattern of descriptionPatterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return match[1].trim().replace(/['"]/g, '');
+    }
+  }
+
+  // Fallback: use first sentence or first 200 characters
+  const sentences = text.split(/[.!?]+/);
+  if (sentences.length > 0 && sentences[0].length > 10) {
+    return sentences[0].trim() + '.';
+  }
+
+  return text.substring(0, 200).trim() + (text.length > 200 ? '...' : '');
+}
+
+/**
+ * Extract key features from text response
+ */
+function extractKeyFeaturesFromText(text) {
+  const features = [];
+  const textLower = text.toLowerCase();
+
+  // Common infrastructure issues to look for
+  const featureKeywords = {
+    'Multiple potholes': ['multiple', 'several', 'many', 'pothole'],
+    'Water damage': ['water', 'wet', 'flood', 'moisture'],
+    'Cracked surface': ['crack', 'split', 'broken', 'damaged'],
+    'Safety hazard': ['dangerous', 'hazard', 'unsafe', 'risk'],
+    'Poor drainage': ['drain', 'standing water', 'pooling'],
+    'Structural damage': ['structural', 'foundation', 'support'],
+    'Wear and tear': ['worn', 'deteriorated', 'aged', 'old']
+  };
+
+  for (const [feature, keywords] of Object.entries(featureKeywords)) {
+    if (keywords.some(keyword => textLower.includes(keyword))) {
+      features.push(feature);
+    }
+  }
+
+  return features.length > 0 ? features : ['Infrastructure issue identified'];
+}
+
+/**
  * Extract category from text response
  */
 function extractCategoryFromText(text) {
   const textLower = text.toLowerCase();
-  
+
   for (const category of Object.keys(CIVIC_CATEGORIES)) {
     if (textLower.includes(category.replace('_', ' ')) || textLower.includes(category)) {
       return category;
     }
   }
-  
+
   return 'other';
 }
 
@@ -467,7 +577,7 @@ function extractCategoryFromText(text) {
  */
 function extractSeverityFromText(text) {
   const textLower = text.toLowerCase();
-  
+
   if (textLower.includes('urgent') || textLower.includes('severe') || textLower.includes('5')) {
     return 5;
   } else if (textLower.includes('high') || textLower.includes('4')) {
@@ -477,7 +587,7 @@ function extractSeverityFromText(text) {
   } else if (textLower.includes('low') || textLower.includes('minor') || textLower.includes('2')) {
     return 2;
   }
-  
+
   return 1;
 }
 
@@ -500,7 +610,7 @@ function keywordBasedCategorization(description) {
   };
 
   const descLower = description.toLowerCase();
-  
+
   for (const [category, terms] of Object.entries(keywords)) {
     const matchedTerms = terms.filter(term => descLower.includes(term));
     if (matchedTerms.length > 0) {
@@ -581,7 +691,7 @@ function getFallbackSuggestions(category, priority) {
 function generateSmartFallback(filename, fileType) {
   const name = filename.toLowerCase();
   const timestamp = new Date().toLocaleString();
-  
+
   // Look for keywords in filename
   if (name.includes('pothole') || name.includes('road') || name.includes('crack')) {
     return `Road infrastructure image uploaded (${filename}). This appears to be related to road surface issues. Photo taken on ${timestamp}. Please provide additional details in the description field for better categorization.`;
@@ -596,7 +706,7 @@ function generateSmartFallback(filename, fileType) {
   } else if (name.includes('garbage') || name.includes('trash') || name.includes('litter')) {
     return `Waste management image uploaded (${filename}). This appears to be related to garbage or litter issues. Photo taken on ${timestamp}. Please provide details about the waste problem.`;
   }
-  
+
   return `Civic infrastructure image uploaded (${filename}). High-quality ${fileType} image captured on ${timestamp}. AI analysis is temporarily unavailable due to quota limits. Please provide a detailed description of the issue to help with categorization and processing.`;
 }
 
@@ -605,7 +715,7 @@ function generateSmartFallback(filename, fileType) {
  */
 function extractCategoryFromFilename(filename) {
   const name = filename.toLowerCase();
-  
+
   if (name.includes('pothole') || name.includes('road') || name.includes('crack')) return 'pothole';
   if (name.includes('light') || name.includes('lamp') || name.includes('street')) return 'street_light';
   if (name.includes('drain') || name.includes('water') || name.includes('flood')) return 'drainage';
@@ -614,7 +724,7 @@ function extractCategoryFromFilename(filename) {
   if (name.includes('park') || name.includes('playground') || name.includes('bench')) return 'park_maintenance';
   if (name.includes('garbage') || name.includes('trash') || name.includes('litter')) return 'garbage';
   if (name.includes('graffiti') || name.includes('vandal') || name.includes('spray')) return 'graffiti';
-  
+
   return 'other';
 }
 

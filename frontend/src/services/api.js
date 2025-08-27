@@ -158,7 +158,10 @@ export const issuesAPI = {
     });
   },
   
-  getIssues: (params = {}) => api.get('/issues', { params }),
+  getIssues: (params = {}) => api.get('/issues', { 
+    params,
+    timeout: 15000 // 15 second timeout for issues
+  }),
   getIssueById: (id) => api.get(`/issues/${id}`),
   updateIssue: (id, updateData) => api.put(`/issues/${id}`, updateData),
   deleteIssue: (id) => api.delete(`/issues/${id}`),

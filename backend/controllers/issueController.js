@@ -274,6 +274,8 @@ const getIssues = async (req, res) => {
       search
     } = req.query;
 
+    console.log('Get issues request:', { reportedBy, limit, sortBy, sortOrder });
+
     // Build filter object
     const filter = {};
     
@@ -283,12 +285,15 @@ const getIssues = async (req, res) => {
     if (reportedBy) filter.reportedBy = reportedBy;
     if (assignedTo) filter.assignedTo = assignedTo;
 
-    // Only show public issues to regular users, unless they're viewing their own
+    // Simplified permission check for better performance
     if (req.user.role !== 'admin') {
-      filter.$or = [
-        { isPublic: true },
-        { reportedBy: req.user._id }
-      ];
+      if (reportedBy && reportedBy === req.user._id.toString()) {
+        // User is requesting their own issues - allow it
+        filter.reportedBy = req.user._id;
+      } else {
+        // User is requesting public issues
+        filter.isPublic = true;
+      }
     }
 
     // Text search
@@ -296,13 +301,20 @@ const getIssues = async (req, res) => {
       filter.$text = { $search: search };
     }
 
-    // Pagination - allow higher limits for admins
+    // Pagination - be more conservative with limits to prevent timeouts
     const pageNum = Math.max(1, parseInt(page));
-    const maxLimit = req.user.role === 'admin' ? 1000 : 100;
+    const maxLimit = req.user.role === 'admin' ? 500 : 100;
     const limitNum = Math.min(maxLimit, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * limitNum;
 
+    // Validate sort field to prevent injection
+    const allowedSortFields = ['createdAt', 'updatedAt', 'title', 'status', 'priority', 'category'];
+    const safeSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'createdAt';
+    const safeSortOrder = sortOrder === 'asc' ? 1 : -1;
+
     let issues, totalCount;
+
+    console.log('Filter object:', filter);
 
     // Handle geospatial queries separately since $near doesn't work with sort
     if (latitude && longitude) {
@@ -323,19 +335,22 @@ const getIssues = async (req, res) => {
 
         // Sort options
         const sortOptions = {};
-        sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
+        sortOptions[safeSortBy] = safeSortOrder;
 
-        // Execute geospatial query
-        [issues, totalCount] = await Promise.all([
+        // Execute geospatial query with timeout
+        const queryPromise = Promise.all([
           Issue.find(geoFilter)
             .populate('reportedBy', 'firstName lastName email')
             .populate('assignedTo', 'firstName lastName email')
             .sort(sortOptions)
             .skip(skip)
             .limit(limitNum)
-            .lean(),
-          Issue.countDocuments(geoFilter)
+            .lean()
+            .maxTimeMS(10000), // 10 second timeout
+          Issue.countDocuments(geoFilter).maxTimeMS(5000) // 5 second timeout
         ]);
+
+        [issues, totalCount] = await queryPromise;
       } else {
         // Invalid coordinates, return empty results
         issues = [];
@@ -344,19 +359,47 @@ const getIssues = async (req, res) => {
     } else {
       // Regular query without geospatial filtering
       const sortOptions = {};
-      sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
+      sortOptions[safeSortBy] = safeSortOrder;
 
-      // Execute regular query
-      [issues, totalCount] = await Promise.all([
-        Issue.find(filter)
-          .populate('reportedBy', 'firstName lastName email')
-          .populate('assignedTo', 'firstName lastName email')
-          .sort(sortOptions)
-          .skip(skip)
-          .limit(limitNum)
-          .lean(),
-        Issue.countDocuments(filter)
-      ]);
+      console.log('Executing query with sort:', sortOptions);
+
+      // Execute regular query with timeout and better error handling
+      try {
+        const queryPromise = Promise.all([
+          Issue.find(filter)
+            .populate('reportedBy', 'firstName lastName email')
+            .populate('assignedTo', 'firstName lastName email')
+            .sort(sortOptions)
+            .skip(skip)
+            .limit(limitNum)
+            .lean()
+            .maxTimeMS(10000), // 10 second timeout
+          Issue.countDocuments(filter).maxTimeMS(5000) // 5 second timeout
+        ]);
+
+        [issues, totalCount] = await queryPromise;
+        console.log(`Found ${issues.length} issues out of ${totalCount} total`);
+      } catch (queryError) {
+        console.error('Database query error:', queryError);
+        
+        // If query times out or fails, try a simpler query
+        if (queryError.name === 'MongooseError' || queryError.code === 50) {
+          console.log('Falling back to simpler query...');
+          
+          // Simplified fallback query
+          issues = await Issue.find(filter)
+            .select('title description category status priority createdAt updatedAt location address images')
+            .populate('reportedBy', 'firstName lastName')
+            .sort({ [safeSortBy]: safeSortOrder })
+            .limit(limitNum)
+            .lean()
+            .maxTimeMS(5000);
+          
+          totalCount = await Issue.countDocuments(filter).maxTimeMS(3000);
+        } else {
+          throw queryError;
+        }
+      }
     }
 
     // Calculate pagination info
@@ -367,7 +410,7 @@ const getIssues = async (req, res) => {
     res.json({
       success: true,
       data: {
-        issues,
+        issues: issues || [],
         pagination: {
           currentPage: pageNum,
           totalPages,
@@ -381,11 +424,17 @@ const getIssues = async (req, res) => {
   } catch (error) {
     console.error('Get issues error:', error);
     console.error('Error stack:', error.stack);
+    
+    // Return a more user-friendly error response
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch issues',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      message: 'Failed to fetch issues. Please try again.',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? {
+        stack: error.stack,
+        name: error.name,
+        code: error.code
+      } : undefined
     });
   }
 };
